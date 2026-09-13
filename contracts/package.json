@@ -1,0 +1,17 @@
+{
+  "name": "@covenant/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Covenant protocol contracts (Creditcoin testnet, Attestcoin proofs)",
+  "license": "MIT",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "fmt": "forge fmt",
+    "abi": "bash script/export-abi.sh"
+  },
+  "dependencies": {
+    "@gluwa/asc-contracts": "0.2.1",
+    "@openzeppelin/contracts": "5.6.1"
+  }
+}

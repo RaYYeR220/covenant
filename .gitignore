@@ -1,0 +1,27 @@
+# dependencies and build output
+node_modules/
+.next/
+dist/
+out/
+cache/
+coverage/
+*.log
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# local notes and scratch
+notes/
+scratch/
+tmp/
+*.local
+.vscode/
+.idea/
+.DS_Store
