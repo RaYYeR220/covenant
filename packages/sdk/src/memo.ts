@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CovenantKind, type CovenantKindValue } from "./covenants";
 
 export const DEFAULT_VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const DEFAULT_VENICE_MODEL = "llama-3.3-70b";
+export const DEFAULT_VENICE_MODEL = "qwen3-235b-a22b-instruct-2507";
 
 export interface PledgeTokenActivity {
   token: Address;
@@ -19,6 +19,8 @@ export interface RiskProfile {
   breaches: number;
   currentAaveDebt?: bigint;
   pledgeTokenActivity?: PledgeTokenActivity[];
+  /** Optional scanned (not proof-verified) activity summary, passed to the model labelled as observed. */
+  observedActivity?: Record<string, unknown>;
 }
 
 export interface ProposedTerm {
@@ -191,8 +193,8 @@ async function pickModel(baseUrl: string, apiKey: string, fetchImpl: typeof fetc
     if (!res.ok) return DEFAULT_VENICE_MODEL;
     const body = (await res.json()) as { data?: { id: string }[] };
     const ids = (body.data ?? []).map((m) => m.id);
-    // Prefer the largest well-known strong model available; fall back to default.
-    const preferenceOrder = ["llama-3.1-405b", "llama-3.3-70b", "llama-3.1-70b"];
+    // Prefer models that accept a json_schema response_format; fall back to default.
+    const preferenceOrder = [DEFAULT_VENICE_MODEL, "llama-3.1-405b", "llama-3.3-70b", "llama-3.1-70b"];
     for (const preferred of preferenceOrder) {
       if (ids.includes(preferred)) return preferred;
     }
@@ -202,7 +204,26 @@ async function pickModel(baseUrl: string, apiKey: string, fetchImpl: typeof fetc
   }
 }
 
-function buildPrompt(profile: RiskProfile): string {
+function buildPrompt(profile: RiskProfile, ceilings?: MemoTemplateCeilings): string {
+  const extra: string[] = [];
+  if (profile.observedActivity) {
+    extra.push(
+      `Observed on-chain activity (scanned from source-chain logs, not yet proof-verified): ${JSON.stringify(
+        profile.observedActivity,
+        (_k, v) => (typeof v === "bigint" ? v.toString() : v),
+        2
+      )}`
+    );
+  }
+  if (ceilings) {
+    extra.push(
+      "Threshold semantics: DEBT_CAP threshold = largest single Aave borrow allowed on the target reserve; NEGATIVE_PLEDGE threshold = largest single outflow allowed of the target token. Both are raw token units (USDC has 6 decimals, so 60000000 = 60 USDC). LOWER threshold = TIGHTER covenant; the ceiling is the LOOSEST allowed value, not a conservative one. Thin or unproven history warrants tight thresholds well below the ceiling.",
+      `Template ceilings (thresholds are raw token units as decimal strings; proposals above a ceiling are clamped, unlisted targets are dropped): ${JSON.stringify(
+        ceilings,
+        (_k, v) => (typeof v === "bigint" ? v.toString() : v)
+      )}`
+    );
+  }
   return [
     "You are a credit risk analyst for an under-collateralized lending protocol.",
     "Propose covenant terms based ONLY on the proven on-chain facts below.",
@@ -219,7 +240,8 @@ function buildPrompt(profile: RiskProfile): string {
       },
       null,
       2
-    )}`
+    )}`,
+    ...extra
   ].join("\n");
 }
 
@@ -253,7 +275,7 @@ export async function generateRiskMemo(
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: buildPrompt(profile) }],
+        messages: [{ role: "user", content: buildPrompt(profile, options.ceilings) }],
         response_format: { type: "json_schema", json_schema: RESPONSE_JSON_SCHEMA }
       })
     });

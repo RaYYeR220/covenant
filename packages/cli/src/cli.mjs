@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Covenant command line: open lines, prove history, report breaches, cure, settle defaults.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,12 +10,18 @@ import {
   formatEther,
   getAddress,
   http,
-  parseEther
+  parseAbiItem,
+  parseEther,
+  parseEventLogs
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  AAVE_POOL_ADDRESS,
+  PLEDGE_TOKENS,
   ProofClient,
   decodeReceipt,
+  generateRiskMemo,
+  scanWallet,
   toContractBatchProofArgs,
   toContractProofArgs
 } from "@covenant/sdk";
@@ -85,6 +91,10 @@ function sourceRpc(chainKey) {
   return chainKey === 3 ? "https://ethereum-rpc.publicnode.com" : "https://ethereum-sepolia-rpc.publicnode.com";
 }
 
+function sourceExplorer(chainKey) {
+  return chainKey === 3 ? "https://etherscan.io" : "https://sepolia.etherscan.io";
+}
+
 async function sourceBlock(chainKey, txHash) {
   const res = await fetch(sourceRpc(chainKey), {
     method: "POST",
@@ -117,6 +127,78 @@ async function findLogIndex(term, linkedWallet, encodedTx) {
     if (ok) return i;
   }
   return -1;
+}
+
+/** Splits argv into positionals and --flags (`--once` → true, `--interval 30` → "30"). */
+function parseArgs(argv) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) flags[key] = true;
+      else flags[key] = argv[++i];
+    } else positional.push(a);
+  }
+  return { positional, flags };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ts = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
+const errMsg = (err) => (err?.shortMessage ?? err?.message ?? String(err)).split("\n")[0];
+
+const sourceClients = new Map();
+function sourceClient(chainKey) {
+  if (!sourceClients.has(chainKey)) {
+    sourceClients.set(chainKey, createPublicClient({ transport: http(sourceRpc(chainKey), { retryCount: 5, retryDelay: 1000 }) }));
+  }
+  return sourceClients.get(chainKey);
+}
+
+const LIQUIDATION_CALL = parseAbiItem(
+  "event LiquidationCall(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken)"
+);
+const BORROW = parseAbiItem(
+  "event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode)"
+);
+const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+
+async function getLogsRetry(client, params, retries = 5) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.getLogs(params);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await sleep(1000 * 2 ** attempt);
+    }
+  }
+}
+
+/**
+ * Breach candidates for a linked wallet in [from, to], chunked ≤500 blocks:
+ * LiquidationCall(user=wallet) → CROSS_DEFAULT, Borrow(onBehalfOf=wallet) → DEBT_CAP,
+ * Transfer(from=wallet) on pledge targets → NEGATIVE_PLEDGE.
+ */
+async function scanBreachCandidates(chainKey, pool, walletAddr, pledgeTargets, from, to) {
+  const client = sourceClient(chainKey);
+  const out = [];
+  for (let start = from; start <= to; start += 500n) {
+    const end = start + 499n < to ? start + 499n : to;
+    const range = { fromBlock: start, toBlock: end };
+    if (pool) {
+      for (const l of await getLogsRetry(client, { address: pool, event: LIQUIDATION_CALL, args: { user: walletAddr }, ...range }))
+        out.push({ kind: 0, txHash: l.transactionHash, block: l.blockNumber });
+      for (const l of await getLogsRetry(client, { address: pool, event: BORROW, args: { onBehalfOf: walletAddr }, ...range }))
+        out.push({ kind: 1, txHash: l.transactionHash, block: l.blockNumber, reserve: l.args.reserve });
+    }
+    if (pledgeTargets.length) {
+      for (const l of await getLogsRetry(client, { address: pledgeTargets, event: TRANSFER, args: { from: walletAddr }, ...range }))
+        out.push({ kind: 2, txHash: l.transactionHash, block: l.blockNumber, token: l.address });
+    }
+  }
+  return out;
 }
 
 function findRepayLogIndex(encodedTx, pool, walletAddr) {
@@ -171,7 +253,15 @@ const commands = {
   },
 
   /** open <bondCTC> <chainKey> <debtCapReserve> <debtCapThreshold> <pledgeToken> <pledgeThreshold> */
-  async open([bond, chainKey, debtReserve, debtThreshold, pledgeToken, pledgeThreshold]) {
+  async open(argv) {
+    const { positional, flags } = parseArgs(argv);
+    const [bond, chainKey, debtReserve, debtThreshold, pledgeToken, pledgeThreshold] = positional;
+    let memoHash = process.env.COVENANT_MEMO_HASH ?? `0x${"0".repeat(64)}`;
+    if (flags.memo) {
+      memoHash = JSON.parse(readFileSync(flags.memo, "utf8")).memoHash;
+      if (!/^0x[0-9a-fA-F]{64}$/.test(memoHash ?? "")) throw new Error(`${flags.memo} has no valid memoHash`);
+      console.log(`memoHash ${memoHash} (from ${flags.memo})`);
+    }
     const client = wallet();
     const me = client.account.address;
     const ck = Number(chainKey);
@@ -199,7 +289,6 @@ const commands = {
       { kind: 1, chainKey: BigInt(ck), target: getAddress(debtReserve), threshold: BigInt(debtThreshold), retired: false },
       { kind: 2, chainKey: BigInt(ck), target: getAddress(pledgeToken), threshold: BigInt(pledgeThreshold), retired: false }
     ];
-    const memoHash = process.env.COVENANT_MEMO_HASH ?? `0x${"0".repeat(64)}`;
     const receipt = await send(client, MANAGER, "openLine", [terms, amount, me, deadline, signature, memoHash]);
     const next = await pub.readContract({ ...MANAGER, functionName: "nextLineId" });
     console.log(`opened line ${next - 1n} at Creditcoin block ${receipt.blockNumber}`);
@@ -282,6 +371,226 @@ const commands = {
 
   async default([lineId]) {
     await send(wallet(), MANAGER, "settleDefault", [BigInt(lineId)]);
+  },
+
+  /** watch [--once] [--interval 30] [--lines 2,3] — autonomous watcher: scan attested source blocks, report breaches */
+  async watch(argv) {
+    const { flags } = parseArgs(argv);
+    const once = flags.once === true;
+    const intervalMs = Number(flags.interval ?? 30) * 1000;
+    const lineFilter = typeof flags.lines === "string" ? flags.lines.split(",").map((s) => BigInt(s.trim())) : null;
+    const client = wallet();
+    console.log(`[${ts()}] watcher ${client.account.address} interval ${intervalMs / 1000}s${lineFilter ? ` lines ${lineFilter.join(",")}` : ""}`);
+    const cursors = new Map(); // `${lineId}:${chainKey}` -> next unscanned source height
+    const done = new Set(); // `${lineId}:${termIndex}:${txHash}` already decided (reported or skipped)
+
+    const tick = async (n) => {
+      const next = await pub.readContract({ ...MANAGER, functionName: "nextLineId" });
+      const ids = lineFilter ?? Array.from({ length: Number(next) - 1 }, (_, i) => BigInt(i + 1));
+      const active = [];
+      for (const id of ids) {
+        const line = await pub.readContract({ ...MANAGER, functionName: "lineOf", args: [id] });
+        if (line.status === 1) active.push({ id, line });
+      }
+      const attested = new Map();
+      const parts = [];
+      let totalCandidates = 0;
+      for (const { id, line } of active) {
+        const terms = await pub.readContract({ ...MANAGER, functionName: "termsOf", args: [id] });
+        const byChain = new Map();
+        terms.forEach((t, i) => {
+          if (t.retired) return;
+          const ck = Number(t.chainKey);
+          if (!byChain.has(ck)) byChain.set(ck, []);
+          byChain.get(ck).push({ ...t, index: i });
+        });
+        for (const [ck, chainTerms] of byChain) {
+          const key = `${id}:${ck}`;
+          try {
+            if (!attested.has(ck)) attested.set(ck, BigInt(await proofs.attestedHeight(ck)));
+            const to = attested.get(ck);
+            const from = cursors.get(key) ?? BigInt(await pub.readContract({ ...MANAGER, functionName: "activeFromHeight", args: [id, BigInt(ck)] }));
+            if (from > to) {
+              parts.push(`line ${id} ck${ck} up to date @${to}`);
+              continue;
+            }
+            const pool = await pub.readContract({ ...MANAGER, functionName: "sourcePoolOf", args: [id, BigInt(ck)] });
+            const zero = "0x0000000000000000000000000000000000000000";
+            const pledgeTargets = [...new Set(chainTerms.filter((t) => t.kind === 2 && t.target !== zero).map((t) => getAddress(t.target)))];
+            const candidates = await scanBreachCandidates(ck, pool !== zero ? pool : AAVE_POOL_ADDRESS[ck], line.linkedWallet, pledgeTargets, from, to);
+            totalCandidates += candidates.length;
+            parts.push(`line ${id} ck${ck} window ${from}..${to} candidates ${candidates.length}`);
+            let clean = true;
+            const proofCache = new Map();
+            for (const c of candidates) {
+              const matching = chainTerms.filter(
+                (t) =>
+                  t.kind === c.kind &&
+                  (c.kind === 0 ||
+                    (c.kind === 1 && (t.target === zero || t.target.toLowerCase() === c.reserve.toLowerCase())) ||
+                    (c.kind === 2 && t.target.toLowerCase() === c.token.toLowerCase()))
+              );
+              for (const term of matching) {
+                const doneKey = `${id}:${term.index}:${c.txHash}`;
+                if (done.has(doneKey)) continue;
+                const label = `line ${id} term ${term.index} ${KIND_NAME[term.kind]} src ${c.txHash} @${c.block}`;
+                try {
+                  if (!proofCache.has(c.txHash)) proofCache.set(c.txHash, toContractProofArgs(await proofs.proofByTx(ck, c.txHash)));
+                  const p = proofCache.get(c.txHash);
+                  const logIndex = await findLogIndex(term, line.linkedWallet, p.encodedTx);
+                  if (logIndex < 0) {
+                    console.log(`  skip ${label}: threshold not exceeded`);
+                    done.add(doneKey);
+                    continue;
+                  }
+                  const proofArgs = [id, term.index, p.height, p.encodedTx, p.merkleProof, p.continuityProof, BigInt(logIndex)];
+                  const [ok, amount, reason] = await pub.readContract({ ...MANAGER, functionName: "previewBreach", args: proofArgs });
+                  if (!ok) {
+                    console.log(`  skip ${label}: ${reason || "preview rejected"}`);
+                    done.add(doneKey);
+                    continue;
+                  }
+                  console.log(`  BREACH ${label} amount ${amount} log ${logIndex}: reporting`);
+                  const receipt = await send(client, MANAGER, "reportBreach", proofArgs);
+                  const [ev] = parseEventLogs({ abi: MANAGER.abi, logs: receipt.logs, eventName: "CovenantBreached" });
+                  console.log(
+                    `  reported ${label}: ${EXPLORER}/tx/${receipt.transactionHash} bounty ${ev ? formatEther(ev.args.bounty) : "?"} source ${sourceExplorer(ck)}/tx/${c.txHash}`
+                  );
+                  done.add(doneKey);
+                  if (receipt.status === "success") break;
+                } catch (err) {
+                  clean = false;
+                  console.log(`  error ${label}: ${errMsg(err)} (retry next tick)`);
+                }
+              }
+              const status = (await pub.readContract({ ...MANAGER, functionName: "lineOf", args: [id] })).status;
+              if (status !== 1) {
+                console.log(`  line ${id} is now ${STATUS[status]}; stop watching it`);
+                break;
+              }
+            }
+            if (clean) cursors.set(key, to + 1n);
+          } catch (err) {
+            parts.push(`line ${id} ck${ck} error: ${errMsg(err)}`);
+          }
+        }
+      }
+      console.log(`[${ts()}] tick ${n}: watching ${active.length} active line(s) [${active.map((a) => a.id).join(",")}] candidates ${totalCandidates} | ${parts.join(" | ") || "nothing to scan"}`);
+    };
+
+    for (let n = 1; ; n++) {
+      try {
+        await tick(n);
+      } catch (err) {
+        console.log(`[${ts()}] tick ${n} failed: ${errMsg(err)} (retry next tick)`);
+      }
+      if (once) return;
+      await sleep(intervalMs);
+    }
+  },
+
+  /** memo <wallet> [--chainKey 1] [--from <block>] [--out <file>] [--model <venice model>] — live Venice risk memo over scanned facts */
+  async memo(argv) {
+    const { positional, flags } = parseArgs(argv);
+    if (!positional[0]) throw new Error("usage: memo <wallet> [--chainKey 1] [--from <block>] [--out <file>]");
+    const who = getAddress(positional[0]);
+    const ck = Number(flags.chainKey ?? 1);
+    const src = sourceClient(ck);
+    const latest = await src.getBlockNumber();
+    const from = flags.from !== undefined ? BigInt(flags.from) : latest > 20000n ? latest - 20000n : 0n;
+    console.error(`scanning chainKey ${ck} blocks ${from}..${latest} for ${who}`);
+    const cands = await scanWallet(src, ck, who, from, latest, { chunkSize: 500n, retry: { retries: 5, baseDelayMs: 1000 } });
+
+    const sumBy = (list, keyOf) => {
+      const out = {};
+      for (const c of list) out[keyOf(c)] = ((BigInt(out[keyOf(c)] ?? 0)) + c.amount).toString();
+      return out;
+    };
+    const reserveOf = (c) => getAddress(`0x${c.topics[1].slice(26)}`);
+    const repays = cands.filter((c) => c.kind === "REPAY");
+    const borrows = cands.filter((c) => c.kind === "BORROW");
+    const liquidations = cands.filter((c) => c.kind === "LIQUIDATION");
+    const outflows = cands.filter((c) => c.kind === "PLEDGE_TRANSFER_OUT");
+    const inflows = cands.filter((c) => c.kind === "PLEDGE_TRANSFER_IN");
+    const largest = outflows.reduce((m, c) => (!m || c.amount > m.amount ? c : m), null);
+    const tokens = PLEDGE_TOKENS[ck] ?? [];
+
+    const record = await pub.readContract({ ...RECORD, functionName: "recordOf", args: [who] });
+    let currentAaveDebt;
+    const aavePool = AAVE_POOL_ADDRESS[ck];
+    if (aavePool) {
+      try {
+        const data = await src.readContract({
+          address: aavePool,
+          abi: [parseAbiItem("function getUserAccountData(address) view returns (uint256,uint256,uint256,uint256,uint256,uint256)")],
+          functionName: "getUserAccountData",
+          args: [who]
+        });
+        currentAaveDebt = data[1];
+      } catch {}
+    }
+
+    const facts = {
+      window: { fromBlock: from.toString(), toBlock: latest.toString(), blocks: (latest - from + 1n).toString() },
+      aaveRepays: { count: repays.length, totalByReserve: sumBy(repays, reserveOf) },
+      aaveBorrows: { count: borrows.length, totalByReserve: sumBy(borrows, reserveOf) },
+      aaveLiquidations: { count: liquidations.length },
+      pledgeTokenOutflows: {
+        count: outflows.length,
+        totalByToken: sumBy(outflows, (c) => c.address),
+        largestSingle: largest ? { token: largest.address, amount: largest.amount.toString(), txHash: largest.txHash } : null
+      },
+      aaveDebtUsdBase8: currentAaveDebt?.toString() ?? null,
+      creditRecord: Object.fromEntries(Object.entries(record).map(([k, v]) => [k, typeof v === "bigint" ? v.toString() : v]))
+    };
+    console.error(`facts: ${JSON.stringify(facts)}`);
+
+    const [maxDebt, maxPledge] = await Promise.all([
+      pub.readContract({ ...MANAGER, functionName: "maxDebtCapThreshold" }),
+      pub.readContract({ ...MANAGER, functionName: "maxPledgeThreshold" })
+    ]);
+    const ceilings = {
+      maxThresholdByKind: { 1: maxDebt, 2: maxPledge },
+      allowlistedTargets: { [ck]: [...tokens, ...(aavePool ? [aavePool] : [])] }
+    };
+    const result = await generateRiskMemo(
+      {
+        wallet: who,
+        chainKey: ck,
+        provenRepays: Number(record.provenRepays),
+        breaches: Number(record.breaches),
+        currentAaveDebt,
+        pledgeTokenActivity: tokens.map((t) => ({
+          token: t,
+          transfersOut: outflows.filter((c) => c.address.toLowerCase() === t.toLowerCase()).length,
+          transfersIn: inflows.filter((c) => c.address.toLowerCase() === t.toLowerCase()).length
+        })),
+        observedActivity: facts
+      },
+      { apiKey: process.env.VENICE_API_KEY, model: flags.model ?? process.env.VENICE_MODEL, ceilings }
+    );
+    if (result.status !== "ok") {
+      console.log(JSON.stringify({ status: "unavailable", reason: result.reason }));
+      process.exit(2);
+    }
+    const memo = {
+      status: "ok",
+      wallet: who,
+      chainKey: ck,
+      facts,
+      summary: result.summary,
+      riskFlags: result.riskFlags,
+      proposedTerms: result.proposedTerms.map((t) => ({ ...t, kindName: KIND_NAME[t.kind], threshold: t.threshold.toString() })),
+      ceilings: { maxDebtCapThreshold: maxDebt.toString(), maxPledgeThreshold: maxPledge.toString() },
+      memoHash: result.memoHash
+    };
+    const json = JSON.stringify(memo, null, 2);
+    console.log(json);
+    console.log(`memoHash ${result.memoHash}`);
+    if (flags.out) {
+      writeFileSync(flags.out, json);
+      console.log(`wrote ${flags.out}`);
+    }
   },
 
   /** predicate <kind> <chainKey> <wallet> <txHash> [target] [threshold]  — decode-only check on real data */
