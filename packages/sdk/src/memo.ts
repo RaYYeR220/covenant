@@ -224,7 +224,7 @@ function buildPrompt(profile: RiskProfile): string {
 }
 
 /**
- * Generates a risk memo via Venice AI (OpenAI-compatible chat completions).
+ * Generates a risk memo via the Venice chat completions API.
  * Never fabricates a memo: any missing key, network failure, or schema
  * validation failure returns `{status:"unavailable"}` instead. Proposed terms
  * are always run through `clampProposedTerms` before being returned/hashed —
