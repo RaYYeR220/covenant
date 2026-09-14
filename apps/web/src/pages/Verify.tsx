@@ -32,7 +32,7 @@ interface Check {
   block: bigint;
 }
 
-async function fetchProof(chainKey: number, tx: string): Promise<{ proof: Proof; source: ProofSource; liveError?: string }> {
+export async function fetchProof(chainKey: number, tx: string): Promise<{ proof: Proof; source: ProofSource; liveError?: string }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 25_000);
   try {

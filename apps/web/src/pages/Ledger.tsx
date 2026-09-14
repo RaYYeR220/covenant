@@ -1,5 +1,10 @@
-import { useMemo } from "react";
-import { decodeFunctionData, type Address, type Hex } from "viem";
+import { useMemo, useState } from "react";
+import { decodeFunctionData, isHex, type Address, type Hex } from "viem";
+import { TxSteps } from "../components/WalletBits";
+import { decodeAttestedTx } from "../lib/decoder";
+import { errorText } from "../lib/format";
+import { useTxSteps, useWallet } from "../lib/wallet";
+import { fetchProof } from "./Verify";
 import { AddrLink, Certificate, ErrorNote, ExtLink, Loading, TxLink } from "../components/bits";
 import { CreditMeter } from "../components/CreditMeter";
 import { Seal } from "../components/Seal";
@@ -292,6 +297,118 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
   return <ol className="timeline">{rows.reverse()}</ol>;
 }
 
+interface BreachPreview {
+  breach: boolean;
+  amount: bigint;
+  reason: string;
+  logIndex: number;
+  args: unknown[];
+  bounty: bigint;
+}
+
+function ReportBreach({ lineId, line, terms, bountyBps, onDone }: { lineId: bigint; line: Line; terms: Term[]; bountyBps: bigint; onDone: () => void }) {
+  const w = useWallet();
+  const open = terms.map((t, i) => ({ t, i })).filter((x) => !x.t.retired);
+  const [termIndex, setTermIndex] = useState<number>(open[0]?.i ?? 0);
+  const [tx, setTx] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [preview, setPreview] = useState<BreachPreview>();
+  const steps = useTxSteps();
+  const txValid = isHex(tx) && tx.length === 66;
+  const term = terms[termIndex];
+
+  async function onPreview() {
+    if (!term || !txValid) return;
+    setBusy(true);
+    setErr(undefined);
+    setPreview(undefined);
+    steps.reset();
+    try {
+      const { proof: p } = await fetchProof(Number(term.chainKey), tx);
+      const decoded = decodeAttestedTx(p.txBytes);
+      let logIndex = -1;
+      for (let i = 0; i < decoded.logs.length && logIndex < 0; i++) {
+        const [hit] = (await read<[boolean, bigint, string]>("previewPredicate", [term.kind, term.chainKey, term.target, term.threshold, line.linkedWallet, p.txBytes, BigInt(i)]));
+        if (hit) logIndex = i;
+      }
+      const li = logIndex < 0 ? 0 : logIndex;
+      const args = [lineId, termIndex, BigInt(p.headerNumber), p.txBytes, p.merkleProof, p.continuityProof, BigInt(li)];
+      const [breach, amount, reason] = await read<[boolean, bigint, string]>("previewBreach", args);
+      setPreview({ breach, amount, reason: reason || (logIndex < 0 ? "no log in this tx breaks the term" : "predicate not met"), logIndex: li, args, bounty: (line.bond * bountyBps) / 10_000n });
+    } catch (e) {
+      setErr(errorText(e).split("\n")[0]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSubmit() {
+    if (!preview?.breach) return;
+    const ok = await steps.run([{ label: "Submit breach proof", call: async () => ({ ...manager, functionName: "reportBreach", args: preview.args, fallbackGas: 3_000_000n }) }]);
+    if (ok) onDone();
+  }
+
+  const submitted = steps.steps.some((s) => s.status === "confirmed");
+  return (
+    <section className="block wallet-actions">
+      <h2 className="block-title">Report a breach</h2>
+      <p className="fine">Anyone can check a source-chain transaction against this line. Previewing is a free read call; submitting needs a wallet.</p>
+      <div className="field-row">
+        <label className="field narrow">
+          <span>Covenant</span>
+          <select value={termIndex} onChange={(e) => setTermIndex(Number(e.target.value))}>
+            {open.map(({ t, i }) => (
+              <option key={i} value={i}>
+                {i}: {KIND_NAME[t.kind] ?? t.kind}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field grow">
+          <span>Source tx hash{term ? `, ${sourceChain(term.chainKey).name}` : ""}</span>
+          <input className="mono" value={tx} onChange={(e) => setTx(e.target.value.trim())} spellCheck={false} placeholder="0x…" aria-invalid={!!tx && !txValid} />
+        </label>
+      </div>
+      <div className="form-actions">
+        <button type="button" className="btn-primary" disabled={!txValid || busy || !term} onClick={() => void onPreview()}>
+          {busy ? "Fetching proof…" : "Preview breach"}
+        </button>
+        {preview?.breach && !submitted && (
+          w.account ? (
+            <button type="button" className="btn-primary" disabled={steps.busy} onClick={() => void onSubmit()}>
+              Submit proof
+            </button>
+          ) : w.available ? (
+            <button type="button" className="btn-quiet" onClick={() => void w.connect()}>
+              Connect wallet to submit
+            </button>
+          ) : null
+        )}
+      </div>
+      {err && (
+        <p className="error-note" role="alert">
+          <strong>No preview.</strong> {err}
+        </p>
+      )}
+      {preview && (
+        <p className={`breach-verdict ${preview.breach ? "ok" : "no"}`} aria-live="polite">
+          {preview.breach ? (
+            <>
+              <strong>Breach proven</strong>, bounty {amt(preview.bounty)} wCTC. Log {preview.logIndex}, amount {tokenAmount(term?.target ?? ZERO, preview.amount)}.
+            </>
+          ) : (
+            <>
+              <strong>No breach:</strong> {preview.reason}
+            </>
+          )}
+        </p>
+      )}
+      <TxSteps steps={steps.steps} />
+    </section>
+  );
+}
+
 function StatusSeal({ line }: { line: Line }) {
   const now = useNow();
   const v = statusVariant(line.status);
@@ -528,6 +645,8 @@ function LineDetail({ id }: { id: bigint }) {
           </dl>
         </section>
       </div>
+
+      <ReportBreach lineId={id} line={line} terms={terms} bountyBps={data.bounty} onDone={reload} />
 
       <section className="block">
         <h2 className="block-title">History</h2>

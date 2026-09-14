@@ -7,6 +7,7 @@ import { Verify } from "./pages/Verify";
 import { Watch } from "./pages/Watch";
 import { short } from "./lib/format";
 import { Nav } from "./components/Nav";
+import { WalletButton } from "./components/WalletBits";
 
 function ChainStatus() {
   const { head, error, updatedAt } = useManagerEvents();
@@ -99,7 +100,10 @@ export function App() {
           <span>Covenant</span>
         </a>
         <Nav current={page} />
-        <ChainStatus />
+        <span className="masthead-right">
+          <ChainStatus />
+          <WalletButton />
+        </span>
       </header>
       <main id="main">{body}</main>
       <Footer />

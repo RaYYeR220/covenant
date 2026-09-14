@@ -1,8 +1,19 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { formatEther, formatUnits, parseEther, parseUnits } from "viem";
 import { AddrLink, Certificate, ErrorNote, ExtLink, Loading } from "../components/bits";
-import { ccTx, client, pool } from "../lib/chain";
+import { TxSteps } from "../components/WalletBits";
+import { ADDR, ccTx, client, pool } from "../lib/chain";
+import { useTxSteps, useWallet, wctcAbi } from "../lib/wallet";
 import { useAsync, useBlockTimes, usePoolEvents } from "../lib/hooks";
 import { amt, bps, dateTime, short } from "../lib/format";
+
+const parseShares = (s: string, dec: number) => {
+  try {
+    return /^\d*\.?\d+$/.test(s.trim()) ? parseUnits(s.trim(), dec) : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const read = <T,>(functionName: string, args: unknown[] = []) => client.readContract({ ...pool, functionName, args }) as Promise<T>;
 
@@ -28,6 +39,126 @@ const TITLES: Record<string, string> = {
   RepaymentBooked: "Repayment booked",
   WrittenOff: "Written off"
 };
+
+function PoolActions({ onDone }: { onDone: () => void }) {
+  const w = useWallet();
+  const me = w.account;
+  const mine = useAsync(
+    async () => {
+      if (!me) return undefined;
+      const [shares, maxW, wctcBal, native, dec] = await Promise.all([
+        read<bigint>("balanceOf", [me]),
+        read<bigint>("maxWithdraw", [me]),
+        client.readContract({ address: ADDR.wctc, abi: wctcAbi, functionName: "balanceOf", args: [me] }) as Promise<bigint>,
+        client.getBalance({ address: me }),
+        read<number>("decimals")
+      ]);
+      const value = await read<bigint>("convertToAssets", [shares]);
+      return { shares, maxW, wctcBal, native, value, dec };
+    },
+    [me],
+    15_000
+  );
+  const [depAmt, setDepAmt] = useState("1");
+  const [wdShares, setWdShares] = useState("");
+  const tx = useTxSteps();
+  if (!w.available) return <p className="fine">Read-only view. Install a browser wallet to deposit or withdraw.</p>;
+  if (!me)
+    return (
+      <p className="fine">
+        <button type="button" className="btn-quiet" onClick={() => void w.connect()}>
+          Connect wallet
+        </button>{" "}
+        to deposit tCTC or withdraw your shares.
+      </p>
+    );
+  const parse = (s: string) => {
+    try {
+      return /^\d*\.?\d+$/.test(s.trim()) ? parseEther(s.trim()) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const dep = parse(depAmt);
+  const wd = parseShares(wdShares, mine.data?.dec ?? 18);
+  const d = mine.data;
+  const after = async (ok: boolean) => {
+    mine.reload();
+    if (ok) onDone();
+  };
+  const deposit = async () => {
+    if (!dep) return;
+    await after(
+      await tx.run([
+        { label: `Wrap ${formatEther(dep)} tCTC`, call: async () => ({ address: ADDR.wctc, abi: wctcAbi, functionName: "deposit", value: dep }) },
+        { label: "Approve the pool", call: async () => ({ address: ADDR.wctc, abi: wctcAbi, functionName: "approve", args: [pool.address, dep] }) },
+        { label: "Deposit into the pool", call: async () => ({ ...pool, functionName: "deposit", args: [dep, me] }) }
+      ])
+    );
+  };
+  const withdraw = async () => {
+    if (!wd) return;
+    let assets = 0n;
+    await after(
+      await tx.run([
+        {
+          label: "Redeem shares",
+          call: async () => {
+            assets = await read<bigint>("previewRedeem", [wd]);
+            return { ...pool, functionName: "redeem", args: [wd, me, me] };
+          }
+        },
+        {
+          label: "Unwrap to tCTC",
+          call: async () => {
+            const bal = (await client.readContract({ address: ADDR.wctc, abi: wctcAbi, functionName: "balanceOf", args: [me] })) as bigint;
+            const amount = assets < bal ? assets : bal;
+            return amount > 0n ? { address: ADDR.wctc, abi: wctcAbi, functionName: "withdraw", args: [amount] } : null;
+          }
+        }
+      ])
+    );
+  };
+  return (
+    <div className="wallet-actions">
+      <dl className="line-figs">
+        <div>
+          <dt>Your shares</dt>
+          <dd>{d ? amt(d.shares, d.dec, true) : "…"}</dd>
+        </div>
+        <div>
+          <dt>Worth</dt>
+          <dd>{d ? `${amt(d.value, 18, true)} tCTC` : "…"}</dd>
+        </div>
+        <div>
+          <dt>Max withdraw</dt>
+          <dd>{d ? `${amt(d.maxW, 18, true)} tCTC` : "…"}</dd>
+        </div>
+        <div>
+          <dt>Wallet balance</dt>
+          <dd>{d ? `${amt(d.native, 18, true)} tCTC` : "…"}</dd>
+        </div>
+      </dl>
+      <div className="field-row">
+        <label className="field narrow">
+          <span>Deposit, tCTC</span>
+          <input className="mono" value={depAmt} onChange={(e) => setDepAmt(e.target.value)} inputMode="decimal" aria-invalid={!dep} />
+        </label>
+        <button type="button" className="btn-primary" disabled={!dep || tx.busy} onClick={() => void deposit()}>
+          Deposit
+        </button>
+        <label className="field narrow">
+          <span>Withdraw, shares</span>
+          <input className="mono" value={wdShares} onChange={(e) => setWdShares(e.target.value)} inputMode="decimal" placeholder={d ? formatUnits(d.shares, d.dec) : ""} />
+        </label>
+        <button type="button" className="btn-primary" disabled={!wd || tx.busy} onClick={() => void withdraw()}>
+          Withdraw
+        </button>
+      </div>
+      <TxSteps steps={tx.steps} />
+    </div>
+  );
+}
 
 function PoolEvents() {
   const { events, error, loading, retry } = usePoolEvents();
@@ -137,6 +268,8 @@ export function PoolPage() {
           <p className="fine">
             Vault <AddrLink addr={pool.address} full />. {amt(data.supply, data.decimals)} {data.symbol} shares outstanding.
           </p>
+          <h2 className="block-title">Your position</h2>
+          <PoolActions onDone={reload} />
           <h2 className="block-title">Recent entries</h2>
           <PoolEvents />
         </Certificate>

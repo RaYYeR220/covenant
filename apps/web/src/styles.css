@@ -352,3 +352,23 @@ pre { margin: 0; background: var(--c8); color: var(--c2); padding: 10px 14px; ov
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Wallet actions */
+.masthead-right { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.wallet-chip { font-size: 14px; color: var(--maroon); border: 1px solid var(--maroon); padding: 4px 10px; }
+.wallet-btn { font-size: 14px; padding: 4px 12px; }
+.wallet-btn:disabled { opacity: 0.6; cursor: wait; }
+.wallet-note::before { display: none; }
+.wallet-actions .field-row { align-items: flex-end; flex-wrap: wrap; }
+.wallet-actions .line-figs { margin-bottom: 12px; }
+.tx-steps { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; font-size: 15px; }
+.tx-step { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; border-left: 3px solid var(--c4); padding-left: 10px; }
+.tx-step .tx-status { font-variant: small-caps; letter-spacing: 0.04em; color: var(--c5); }
+.tx-pending { border-color: var(--c6); }
+.tx-confirmed { border-color: var(--green); }
+.tx-confirmed .tx-status { color: var(--green); }
+.tx-error { border-color: var(--maroon); color: var(--maroon); }
+.tx-error .tx-status, .tx-step .tx-error { color: var(--maroon); }
+.breach-verdict { margin: 12px 0 0; padding: 10px 14px; border: 1px solid var(--c4); }
+.breach-verdict.ok { border-color: var(--green); color: var(--green); }
+.breach-verdict.no { border-color: var(--maroon); color: var(--maroon); }
