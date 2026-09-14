@@ -1,0 +1,9 @@
+{
+  "chainId": 102031,
+  "deployer": "0x80a2b667dE7e002E65B585AB159565E69158f6B8",
+  "CovenantEvaluator": "0x7cecD4d7e2Aaa4667916B6da41a646Cd9229e16C",
+  "WCTC": "0x1F281ACd1199a2798c5B9Fa222b18fCa9ebF3dC1",
+  "CovenantPool": "0xB427b1F87966a80D7e50e57B453E7653c228b8be",
+  "CreditRecord": "0x02977ae7C5515EaA562d9353253527226A7f8aA0",
+  "CovenantManager": "0xB828ec5068B3b89bdbdacaafc2b494eAAec990F2"
+}
