@@ -6,7 +6,7 @@ Covenant is an under-collateralized credit rail on Creditcoin. A borrower posts 
 
 Live on Creditcoin testnet. Contracts verified on Blockscout.
 
-- **App:** [covenant-credit.vercel.app](https://covenant-credit.vercel.app) (read-only, no wallet needed)
+- **App:** [covenant-credit.vercel.app](https://covenant-credit.vercel.app) (reads the chain with no wallet; lenders and watchers can act with a browser wallet)
 - **Demo video:** [youtu.be/KZIEI-UwHE8](https://youtu.be/KZIEI-UwHE8)
 - **Deck:** [docs/covenant-deck.pdf](docs/covenant-deck.pdf)
 - **Proof log:** [PROOF.md](PROOF.md)
@@ -77,7 +77,7 @@ On-chain proof of every claim is collected in [PROOF.md](PROOF.md).
 | `contracts/` | Foundry project: `CovenantManager` (the Attestcoin smart contract), `CovenantPool`, `CreditRecord`, `WCTC`, `CovenantPredicates` / `CovenantEvaluator` libraries, 197 tests |
 | `packages/sdk` | TypeScript SDK: proof API client (single, batch, attestation wait), `txBytes` decoder, covenant predicates, wallet scanner, bounded risk memo |
 | `packages/cli` | Borrower and watcher CLI: open, history, draw, repay, breach, cure, default, predicate, autonomous `watch`, risk `memo` |
-| `apps/web` | Web app: landing, ledger of live lines, pool, proof verifier, watcher feed |
+| `apps/web` | Web app: landing, ledger of live lines, pool deposits and withdrawals, breach preview and reporting from the browser, proof verifier, watcher feed |
 | `docs/` | Attestcoin integration guide, pitch deck |
 
 ## Run it
@@ -143,6 +143,7 @@ node packages/cli/src/cli.mjs open <bond> 1 <reserve> <debtCap> <pledgeToken> <p
 - Testnet only. Sepolia and Ethereum mainnet are both readable from Creditcoin testnet today; the live demo uses Sepolia so breaches can be triggered on demand, and mainnet data is used for the liquidation check and the test fixtures.
 - Fresh source transactions need about six minutes of attestation before they can be proven.
 - Interest is simple and accrues per second at a fixed 12% APR. Pool pricing by covenant strength is future work.
+- Borrower actions (open, draw, repay, close) run through the CLI; the web app covers lenders and watchers.
 - The contracts have not been externally audited.
 
 ## License

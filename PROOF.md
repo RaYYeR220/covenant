@@ -101,6 +101,17 @@ reportBreach success https://creditcoin-testnet.blockscout.com/tx/0x0062f75b...
 | `lineOf(3).memoHash` | `0x67135bee9ab7bf95b9c290a16c6c774d87abc6b91565553e4d942e57e4b97763` |
 | Risk flags | `NO_PROVEN_REPAYS`, `NO_ACTIVE_DEBT`, `MINIMAL_PLEDGE_ACTIVITY`, `UNTESTED_CREDITWORTHINESS` |
 
+### From the web app, with a browser wallet
+
+The same actions are available in the web app. These transactions were sent through its interface by the watcher wallet.
+
+| Step | Tx | Result |
+|---|---|---|
+| Lender deposits 1 tCTC (wrap, approve, deposit) | [`0x9053974f…`](https://creditcoin-testnet.blockscout.com/tx/0x9053974f31213a512a36cbcb3885d49b5e6f9dd7fbd26c70aeca8ead4dd73e43) | pool shares minted |
+| Lender withdraws | [`0x05b21f04…`](https://creditcoin-testnet.blockscout.com/tx/0x05b21f04792aec6400a58092f3941bc0bec5bc5f25c30d1bee5c0366de7e92a4) | shares redeemed |
+| Line 3's wallet moves 1 USDC out on Sepolia, pledge cap is 0 | [`0x97243c4e…`](https://sepolia.etherscan.io/tx/0x97243c4e609b53ab6053a79f72da3d7ab795c9eabc5104df19445593a94b936f) | |
+| Watcher previews the proof in the ledger, then submits it | [`0x15572eca…`](https://creditcoin-testnet.blockscout.com/tx/0x15572ecaae21f6c17fab2f24663bbb1dba9bc488e5d69163ea288697cc77d86a) | line 3 frozen, watcher paid 15 |
+
 The memo is advisory. Its thresholds only reached the chain because the borrower chose them, and the contract would have rejected anything above its ceilings. The model's free-text rationale mislabels the reserve symbol in one place; the addresses and thresholds it proposed are correct.
 
 ## Real Ethereum mainnet data
