@@ -1,0 +1,16 @@
+{
+  "name": "@covenant/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "covenant": "./src/cli.mjs"
+  },
+  "scripts": {
+    "covenant": "node ./src/cli.mjs"
+  },
+  "dependencies": {
+    "@covenant/sdk": "workspace:*",
+    "viem": "^2.21.0"
+  }
+}
