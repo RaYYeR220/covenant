@@ -63,6 +63,16 @@ Wiring: [pool manager](https://creditcoin-testnet.blockscout.com/tx/0xf55164532b
 | Watcher resubmits the same breach proof | | [`0x5a409069…`](https://creditcoin-testnet.blockscout.com/tx/0x5a409069bc8754c90f42f392b173545b44bf5f75331f3289a52b03389cd8e1ea) | **reverted** |
 | Borrower moves 150 USDC out, pledge cap is 100 | [`0x72fa120b…`](https://sepolia.etherscan.io/tx/0x72fa120b6d7af9accbf82a1caa75600a64021798146ecc4db98f2be3fd93be2b) | | |
 | Watcher proves the `NEGATIVE_PLEDGE` breach | | [`0xd278b636…`](https://creditcoin-testnet.blockscout.com/tx/0xd278b6363f73c5297c257ecf7cd24d5fe4bd68591b73511be1358da152a4305d) | line frozen, watcher paid 36 |
+| Grace period ends uncured; watcher settles as keeper | | [`0xad8a32aa…`](https://creditcoin-testnet.blockscout.com/tx/0xad8a32aae69d20ebdab9f389921da9c2aa73e4713a53adbd560c2ff748de2afd) | line defaulted, bond recovered to the pool, loss socialized (pool 3,000 to 2,322.38) |
+
+### Time anchoring
+
+| Step | Creditcoin tx | Result |
+|---|---|---|
+| Same borrower opens line 2 (bond 200) | [`0x2d821fb0…`](https://creditcoin-testnet.blockscout.com/tx/0x2d821fb0877c2e951f643a77fb195e05336ca7a962437d881ad42ec83571f680) | active, limit 650 |
+| Watcher submits the old pledge breach proof against line 2 | [`0xedd6f719…`](https://creditcoin-testnet.blockscout.com/tx/0xedd6f719e6b3a027de8aa838adca9de6a35210d04a31fbdad7a8c8283db594d5) | **reverted**: event is older than the line's activation height |
+
+Line 2 has no history boost: the four repay proofs were consumed by line 1 and replay keys are global.
 
 ## Real Ethereum mainnet data
 
