@@ -7,7 +7,7 @@ Covenant is an under-collateralized credit rail on Creditcoin. A borrower posts 
 Live on Creditcoin testnet. Contracts verified on Blockscout.
 
 - **App:** [covenant-credit.vercel.app](https://covenant-credit.vercel.app) (read-only, no wallet needed)
-- **Demo video:** [covenant-credit.vercel.app/demo](https://covenant-credit.vercel.app/demo)
+- **Demo video:** [youtu.be/KZIEI-UwHE8](https://youtu.be/KZIEI-UwHE8)
 - **Deck:** [docs/covenant-deck.pdf](docs/covenant-deck.pdf)
 - **Proof log:** [PROOF.md](PROOF.md)
 
