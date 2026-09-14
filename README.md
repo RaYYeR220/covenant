@@ -6,6 +6,11 @@ Covenant is an under-collateralized credit rail on Creditcoin. A borrower posts 
 
 Live on Creditcoin testnet. Contracts verified on Blockscout.
 
+- **App:** [covenant-credit.vercel.app](https://covenant-credit.vercel.app) (read-only, no wallet needed)
+- **Demo video:** [covenant-credit.vercel.app/demo](https://covenant-credit.vercel.app/demo)
+- **Deck:** [docs/covenant-deck.pdf](docs/covenant-deck.pdf)
+- **Proof log:** [PROOF.md](PROOF.md)
+
 ## Why covenants
 
 Cross-chain credit scores let a borrower prove good behaviour: repayments, deposits, positions. The borrower chooses which transactions to prove. An inclusion proof shows that something happened and can never show that something did not happen, so bad history stays hidden. That is a résumé, not a credit report.
