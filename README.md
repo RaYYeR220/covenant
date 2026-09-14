@@ -76,7 +76,7 @@ On-chain proof of every claim is collected in [PROOF.md](PROOF.md).
 |---|---|
 | `contracts/` | Foundry project: `CovenantManager` (the Attestcoin smart contract), `CovenantPool`, `CreditRecord`, `WCTC`, `CovenantPredicates` / `CovenantEvaluator` libraries, 197 tests |
 | `packages/sdk` | TypeScript SDK: proof API client (single, batch, attestation wait), `txBytes` decoder, covenant predicates, wallet scanner, bounded risk memo |
-| `packages/cli` | Borrower and watcher CLI: open, history, draw, repay, breach, cure, default, predicate |
+| `packages/cli` | Borrower and watcher CLI: open, history, draw, repay, breach, cure, default, predicate, autonomous `watch`, risk `memo` |
 | `apps/web` | Web app: landing, ledger of live lines, pool, proof verifier, watcher feed |
 | `docs/` | Attestcoin integration guide, pitch deck |
 
@@ -104,11 +104,20 @@ node packages/cli/src/cli.mjs predicate cross-default 3 \
 # log 16: CROSS_DEFAULT breach for 0xde09..., amount 3985851340
 ```
 
-Run a watcher (needs a funded Creditcoin testnet key):
+Run an autonomous watcher (needs a funded Creditcoin testnet key). It scans every active line's linked wallet on the source chain, checks candidates with `previewBreach`, and reports only real breaches:
 
 ```bash
 export COVENANT_PRIVATE_KEY=0x...
-node packages/cli/src/cli.mjs breach <lineId> <termIndex> <sepoliaTxHash>
+node packages/cli/src/cli.mjs watch --interval 30      # or --once for a single pass
+node packages/cli/src/cli.mjs breach <lineId> <termIndex> <sepoliaTxHash>   # manual report
+```
+
+Generate a risk memo for a wallet and open a line with its hash:
+
+```bash
+export VENICE_API_KEY=...
+node packages/cli/src/cli.mjs memo <wallet> --out memo.json
+node packages/cli/src/cli.mjs open <bond> 1 <reserve> <debtCap> <pledgeToken> <pledgeCap> --memo memo.json
 ```
 
 | Env | Used by | Purpose |
@@ -125,7 +134,7 @@ node packages/cli/src/cli.mjs breach <lineId> <termIndex> <sepoliaTxHash>
 
 ## Risk memo
 
-`packages/sdk` can generate a risk memo from a wallet's proven facts and propose covenant thresholds. The memo is advisory. Proposed terms outside the contract's ceilings or allowlists are dropped before they reach the user, and the contract stores only the memo hash. Nothing in the memo can raise a limit or loosen a covenant.
+`packages/sdk` can generate a risk memo from a wallet's proven facts and propose covenant thresholds; line 3 on testnet was opened with a live memo and carries its hash on-chain (see [PROOF.md](PROOF.md)). The memo is advisory. Proposed terms outside the contract's ceilings or allowlists are dropped before they reach the user, and the contract stores only the memo hash. Nothing in the memo can raise a limit or loosen a covenant.
 
 ## Honest limits
 

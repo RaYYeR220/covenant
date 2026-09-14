@@ -75,9 +75,10 @@ node packages/cli/src/cli.mjs history <lineId> 1 <repayTx1> <repayTx2> ...
 node packages/cli/src/cli.mjs breach <lineId> <termIndex> <sourceTxHash>
 node packages/cli/src/cli.mjs cure <lineId> <sourceTxHash>
 node packages/cli/src/cli.mjs default <lineId>
+node packages/cli/src/cli.mjs watch --interval 30
 ```
 
-The worker finds the tx-local log index by decoding the proven receipt and asking the contract's `previewPredicate`, waits for attestation (about six minutes for a fresh Sepolia block), then submits.
+`watch` runs this loop unattended for every active line. The worker finds the tx-local log index by decoding the proven receipt and asking the contract's `previewPredicate`, waits for attestation (about six minutes for a fresh Sepolia block), then submits.
 
 ## Transaction encoding notes
 

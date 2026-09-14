@@ -74,6 +74,35 @@ Wiring: [pool manager](https://creditcoin-testnet.blockscout.com/tx/0xf55164532b
 
 Line 2 has no history boost: the four repay proofs were consumed by line 1 and replay keys are global.
 
+### Autonomous watcher on line 2
+
+`covenant watch` ran unattended as the watcher key. Every 30 seconds it scanned the linked wallet's Aave and pledge-token events between the line's activation height and the latest attested Sepolia height, checked each candidate with `previewBreach`, and submitted only real breaches.
+
+| Step | Source tx | Creditcoin tx | Result |
+|---|---|---|---|
+| Borrower borrows 70 USDC on Aave, cap is 60 | [`0x850c300c…`](https://sepolia.etherscan.io/tx/0x850c300cbdf38a98a26943994f6a47f920f433bcef1b7d1b08cc68e6e0ddbd13) | | |
+| Watcher finds it after attestation and reports it, no human input | | [`0x0062f75b…`](https://creditcoin-testnet.blockscout.com/tx/0x0062f75b59c75b961aa12a562d9597f92e31d260a34db777c3e74f60b844d32f) | line 2 frozen, watcher paid 20 |
+
+```
+[02:44:20] tick 6: watching 1 active line(s) [2] candidates 0 | line 2 ck1 up to date @11700020
+reportBreach success https://creditcoin-testnet.blockscout.com/tx/0x0062f75b...
+  reported line 2 term 1 DEBT_CAP src 0x850c300c... @11700029 bounty 20
+```
+
+### Line 3 opened with a live risk memo
+
+`covenant memo` scanned the LP wallet's recent Sepolia activity and its CreditRecord, asked the Venice API for a memo, and clamped the proposed covenants to the contract's ceilings. The wallet has no proven history, so the memo proposed the tightest terms: a 1 USDC debt cap and a zero-outflow negative pledge. Line 3 was opened with those terms and the memo hash.
+
+| | |
+|---|---|
+| openLine | [`0x379bb134…`](https://creditcoin-testnet.blockscout.com/tx/0x379bb134e9063eae94eb38c8280e56275f0dcc5e4f60284bbd1ff5658416b83a) |
+| Linked wallet | `0x80a2b667dE7e002E65B585AB159565E69158f6B8` |
+| Bond / limit | 150 / 487.5 |
+| `lineOf(3).memoHash` | `0x67135bee9ab7bf95b9c290a16c6c774d87abc6b91565553e4d942e57e4b97763` |
+| Risk flags | `NO_PROVEN_REPAYS`, `NO_ACTIVE_DEBT`, `MINIMAL_PLEDGE_ACTIVITY`, `UNTESTED_CREDITWORTHINESS` |
+
+The memo is advisory. Its thresholds only reached the chain because the borrower chose them, and the contract would have rejected anything above its ceilings. The model's free-text rationale mislabels the reserve symbol in one place; the addresses and thresholds it proposed are correct.
+
 ## Real Ethereum mainnet data
 
 The deployed manager's `previewPredicate` evaluates the Aave V3 liquidation [`0xec0b8f78…`](https://etherscan.io/tx/0xec0b8f78036c679ed61d1a3ec1a6d4f733c4a306bfc0b6253cf4e02752883b07) (block 25967341), proof served by the Attestcoin proof API for chain key 3:
