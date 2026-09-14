@@ -6,6 +6,7 @@ import { Seal } from "../components/Seal";
 import { ccTx, client, manager, managerAbi, record, sourceChain } from "../lib/chain";
 import { useAsync, useBlockTimes, useManagerEvents, useNow, type ChainEvent } from "../lib/hooks";
 import { amt, bps, dateTime, duration, KIND_NAME, short, STATUS, tokenAmount, tokenLabel, ZERO } from "../lib/format";
+import { resolveSourceTx, type MerkleProof } from "../lib/sourceProof";
 
 interface Line {
   borrower: Address;
@@ -107,21 +108,43 @@ const EVENT_TITLES: Record<string, string> = {
   LineClosed: "Line closed"
 };
 
-/** Pulls source-chain heights out of the Creditcoin calldata of proof-carrying transactions. */
-async function sourceHeights(hashes: Hex[]): Promise<Record<string, bigint[]>> {
-  const out: Record<string, bigint[]> = {};
+/** A source-chain height, plus (when resolvable) the exact Sepolia tx hash for that proof item. */
+interface SourceRef {
+  height: bigint;
+  hash?: string;
+}
+
+/**
+ * Pulls source-chain heights and merkle proofs out of the Creditcoin calldata of proof-carrying
+ * transactions, then resolves each proof's exact Sepolia tx hash from the same merkle proof
+ * siblings the manager contract itself uses (via the calculateTxIndex precompile + Sepolia's
+ * eth_getTransactionByBlockNumberAndIndex). Falls back to height-only (block link) on any failure.
+ */
+async function sourceRefs(hashes: Hex[]): Promise<Record<string, SourceRef[]>> {
+  const out: Record<string, SourceRef[]> = {};
   await Promise.all(
     hashes.map(async (h) => {
       try {
         const tx = await client.getTransaction({ hash: h });
         const d = decodeFunctionData({ abi: managerAbi, data: tx.input });
         const a = d.args as readonly unknown[];
-        if (d.functionName === "proveHistory") out[h] = [...(a[2] as bigint[])];
-        else if (d.functionName === "proveRepay") out[h] = [a[2] as bigint];
-        else if (d.functionName === "reportBreach") out[h] = [a[2] as bigint];
-        else if (d.functionName === "cureByProof") out[h] = [a[1] as bigint];
+        let items: { height: bigint; proof: MerkleProof }[] = [];
+        if (d.functionName === "proveHistory") {
+          const heights = a[2] as bigint[];
+          const proofs = a[4] as MerkleProof[];
+          items = heights.map((height, i) => ({ height, proof: proofs[i] }));
+        } else if (d.functionName === "proveRepay") {
+          items = [{ height: a[2] as bigint, proof: a[4] as MerkleProof }];
+        } else if (d.functionName === "reportBreach") {
+          items = [{ height: a[2] as bigint, proof: a[4] as MerkleProof }];
+        } else if (d.functionName === "cureByProof") {
+          items = [{ height: a[1] as bigint, proof: a[3] as MerkleProof }];
+        }
+        out[h] = await Promise.all(
+          items.map(async ({ height, proof }) => ({ height, hash: await resolveSourceTx(height, proof) }))
+        );
       } catch {
-        /* heights are an optional enrichment; the Creditcoin tx link is always shown */
+        /* heights/hashes are an optional enrichment; the Creditcoin tx link is always shown */
       }
     })
   );
@@ -140,7 +163,8 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
     () => [...new Set(mine.filter((e) => ["RepayProven", "CovenantBreached", "LineCured"].includes(e.eventName)).map((e) => e.txHash))],
     [mine]
   );
-  const { data: heights } = useAsync(() => sourceHeights(proofTxs), [proofTxs.join(",")]);
+  const { data: refs } = useAsync(() => sourceRefs(proofTxs), [proofTxs.join(",")]);
+  const debtCapTarget = terms.find((t) => t.kind === 1)?.target;
 
   if (error && events.length === 0) return <ErrorNote error={error} onRetry={retry} what="line events" />;
   if (loading && events.length === 0) return <Loading what="line events" />;
@@ -153,12 +177,19 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
     const a = e.args;
     let detail: React.ReactNode = null;
     let source: React.ReactNode = null;
-    const srcLink = (chainKey: bigint | number, height: bigint | undefined) => {
+    const srcLink = (chainKey: bigint | number, ref: SourceRef | undefined) => {
       const sc = sourceChain(chainKey);
-      if (height === undefined || !sc.explorer) return null;
+      if (ref === undefined || !sc.explorer) return null;
+      if (ref.hash) {
+        return (
+          <ExtLink href={`${sc.explorer}/tx/${ref.hash}`} title={ref.hash}>
+            {sc.name} tx <span className="mono">{short(ref.hash, 6, 4)}</span>
+          </ExtLink>
+        );
+      }
       return (
-        <ExtLink href={`${sc.explorer}/block/${height}`}>
-          {sc.name} block {height.toLocaleString("en-US")}
+        <ExtLink href={`${sc.explorer}/block/${ref.height}`}>
+          {sc.name} block {ref.height.toLocaleString("en-US")}
         </ExtLink>
       );
     };
@@ -179,8 +210,8 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
         break;
       case "RepayProven": {
         const k = (repayIdx[e.txHash] = (repayIdx[e.txHash] ?? -1) + 1);
-        detail = <>Amount {(a.amount as bigint).toLocaleString("en-US")} base units</>;
-        source = srcLink(a.chainKey as bigint, heights?.[e.txHash]?.[k]);
+        detail = <>Amount {tokenAmount(debtCapTarget ?? ZERO, a.amount as bigint)}</>;
+        source = srcLink(a.chainKey as bigint, refs?.[e.txHash]?.[k]);
         break;
       }
       case "HistoryUpdated":
@@ -212,7 +243,7 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
             {amt(a.bounty as bigint)} wCTC
           </>
         );
-        source = t ? srcLink(t.chainKey, heights?.[e.txHash]?.[0]) : null;
+        source = t ? srcLink(t.chainKey, refs?.[e.txHash]?.[0]) : null;
         break;
       }
       case "GraceStarted":
@@ -222,7 +253,7 @@ function Timeline({ lineId, terms }: { lineId: bigint; terms: Term[] }) {
         detail = <>{a.byProof ? "Repayment proven on the source chain" : "Cured by repayment"}</>;
         if (a.byProof) {
           const t = terms[Number(a.termIndex)];
-          source = t ? srcLink(t.chainKey, heights?.[e.txHash]?.[0]) : null;
+          source = t ? srcLink(t.chainKey, refs?.[e.txHash]?.[0]) : null;
         }
         break;
       case "LineDefaulted":
@@ -479,7 +510,19 @@ function LineDetail({ id }: { id: bigint }) {
             {line.status === 2 && (
               <div>
                 <dt>Breach amount</dt>
-                <dd>{line.breachAmount.toLocaleString("en-US")} base units</dd>
+                <dd>
+                  {(() => {
+                    const t = terms[line.breachedTerm];
+                    const shown = tokenAmount(t?.target ?? ZERO, line.breachAmount);
+                    return t && t.kind !== 0 ? (
+                      <>
+                        {shown} over a {tokenAmount(t.target, t.threshold)} cap
+                      </>
+                    ) : (
+                      shown
+                    );
+                  })()}
+                </dd>
               </div>
             )}
           </dl>
